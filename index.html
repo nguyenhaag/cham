@@ -144,7 +144,7 @@ th,td{border-bottom:1px solid var(--line);padding:8px 4px;text-align:left}
       <button type="button" class="btn pri" id="exportKeyCur">⬇️ Xuất đáp án bài này</button>
       <button type="button" class="btn" id="exportKeyAll">⬇️ Xuất tất cả các bài</button>
       <label for="importKey" class="btn">⬆️ Nạp file đáp án</label>
-      <input id="importKey" type="file" accept=".xlsx,.csv,.txt,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+      <input id="importKey" type="file" hidden>
     </div>
     <p class="mute" style="margin:6px 0 0">Nạp được: file <b>Excel (.xlsx)</b> dạng bảng — cột đầu "Câu hỏi" (1, 2, 3…), mỗi cột sau là một mã đề, mỗi ô 4 chữ Đ/S (VD <code>SĐĐS</code>); file Excel nhiều trang tính thì mỗi trang là một bài (tên trang = tên bài). Cũng nạp được .csv và .txt do app xuất.</p>
     <p id="fileInfo" class="mute" style="margin:6px 0 0" role="status"></p>
@@ -738,16 +738,18 @@ const looksLikeTable=t=>/c[âa]u/i.test(t.split(/\r?\n/)[0]||"") && /\t|;|,/.tes
 $("importKey").onchange=async e=>{ const f=e.target.files[0]; if(!f) return;
   try{
     let groups;
-    if(/\.xlsx$/i.test(f.name)){
-      const sheets=(await readXlsx(await f.arrayBuffer())).map(sh=>({name:sh.name,keys:tableToKeys(sh.rows)})).filter(g=>Object.keys(g.keys).length);
+    const buf=await f.arrayBuffer(), head=new Uint8Array(buf,0,Math.min(4,buf.byteLength));
+    if(/\.xls$/i.test(f.name) && !(head[0]===0x50&&head[1]===0x4B)) throw new Error("File .xls (Excel 97-2003) chưa đọc được — sếp mở bằng Excel, Lưu thành .xlsx rồi nạp lại.");
+    if(head[0]===0x50&&head[1]===0x4B){ // "PK" = file Excel .xlsx (nén zip)
+      const sheets=(await readXlsx(buf)).map(sh=>({name:sh.name,keys:tableToKeys(sh.rows)})).filter(g=>Object.keys(g.keys).length);
       groups=sheets.length>1?sheets:sheets.map(g=>({name:null,keys:g.keys}));   // 1 trang tính -> nạp vào bài đang chọn
       if(!groups.length) throw new Error("Không thấy bảng đáp án: cần hàng tiêu đề 'Câu hỏi | mã đề…' và các hàng số câu.");
     } else {
-      const t=await f.text();
+      const t=new TextDecoder().decode(buf);
       groups=looksLikeTable(t)?[{name:null,keys:tableToKeys(splitTable(t))}].filter(g=>Object.keys(g.keys).length):parseKeyFile(t);
     }
     $("fileInfo").innerHTML=applyKeyGroups(groups);
-  }catch(err){ $("fileInfo").innerHTML='<span class="err">Không đọc được file. '+esc(err.message&&err.message.length>20?err.message:"")+'</span>'; }
+  }catch(err){ $("fileInfo").innerHTML='<span class="err">Không đọc được file "'+esc(f.name)+'". '+esc(err.message&&err.message.length>20?err.message:"Sếp kiểm tra file là Excel (.xlsx) đúng mẫu.")+'</span>'; }
   e.target.value=""; };
 
 renderExams(); renderKeySel(); renderResults();
