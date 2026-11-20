@@ -144,8 +144,9 @@ th,td{border-bottom:1px solid var(--line);padding:8px 4px;text-align:left}
       <button type="button" class="btn pri" id="exportKeyCur">⬇️ Xuất đáp án bài này</button>
       <button type="button" class="btn" id="exportKeyAll">⬇️ Xuất tất cả các bài</button>
       <label for="importKey" class="btn">⬆️ Nạp file đáp án</label>
-      <input id="importKey" type="file" accept=".txt,.csv,text/plain" hidden>
+      <input id="importKey" type="file" accept=".xlsx,.csv,.txt,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
     </div>
+    <p class="mute" style="margin:6px 0 0">Nạp được: file <b>Excel (.xlsx)</b> dạng bảng — cột đầu "Câu hỏi" (1, 2, 3…), mỗi cột sau là một mã đề, mỗi ô 4 chữ Đ/S (VD <code>SĐĐS</code>); file Excel nhiều trang tính thì mỗi trang là một bài (tên trang = tên bài). Cũng nạp được .csv và .txt do app xuất.</p>
     <p id="fileInfo" class="mute" style="margin:6px 0 0" role="status"></p>
   </div>
   <div class="card">
@@ -460,14 +461,24 @@ async function processSource(getSrc){
   finally{ $("busy").hidden=true; $("camIn").value=""; $("fileIn").value=""; if(!$("result").hidden) $("result").scrollIntoView({block:"start"}); }
 }
 function keyArr(ma){ const k=KEYS[ma]; return k?k.split(","):null; }
+// Phiếu chỉ tô được 3 số mã đề. Nếu đáp án ghi mã dài hơn (VD 1201) thì ghép theo 3 số cuối.
+// Trả về {ma, note} (ma = tên mã đáp án dùng để chấm) hoặc {ma:null, many:[...]} khi có nhiều mã cùng đuôi.
+function resolveMa(read){
+  if(!read || /[_?]/.test(read) || KEYS[read]) return {ma:read};
+  const many=Object.keys(KEYS).filter(k=>k.length>read.length && k.endsWith(read));
+  if(many.length===1) return {ma:many[0], note:"Phiếu tô mã "+read+" → chấm theo đáp án mã "+many[0]+"."};
+  return {ma:null, many};
+}
 function showResult(){
   $("result").hidden=false;
-  $("rSbd").value=CUR.sbd; $("rMa").value=CUR.made;
+  const rs=resolveMa(CUR.made);
+  $("rSbd").value=CUR.sbd; $("rMa").value=rs.ma||CUR.made;
   const warn=[]; if(/[_?]/.test(CUR.sbd)) warn.push("SBD đọc chưa rõ"); if(/[_?]/.test(CUR.made)) warn.push("mã đề đọc chưa rõ");
-  if(!keyArr(CUR.made)) warn.push("chưa có đáp án cho mã đề "+CUR.made);
+  if(rs.many&&rs.many.length>1) warn.push("mã "+CUR.made+" khớp nhiều mã đáp án ("+rs.many.join(", ")+") — sếp gõ đúng mã vào ô Mã đề");
+  else if(!keyArr($("rMa").value)) warn.push("chưa có đáp án cho mã đề "+CUR.made);
   const blank=CUR.ans.filter(a=>a==="").length, dbl=CUR.ans.filter(a=>a==="X").length;
   if(dbl) warn.push(dbl+" ý tô cả Đ và S");
-  $("msg").innerHTML=(warn.length?'<p class="err">⚠️ '+warn.join(" · ")+' — sếp kiểm tra, sửa tay nếu cần.</p>':'<p style="color:var(--ok);font-weight:600">✅ Đọc phiếu tốt.</p>')+'<p class="mute" style="margin:0">Bỏ trống: '+blank+' ý.</p>';
+  $("msg").innerHTML=(warn.length?'<p class="err">⚠️ '+warn.join(" · ")+' — sếp kiểm tra, sửa tay nếu cần.</p>':'<p style="color:var(--ok);font-weight:600">✅ Đọc phiếu tốt.</p>')+(rs.note?'<p style="margin:0;color:var(--pri);font-weight:600">🔗 '+rs.note+'</p>':'')+'<p class="mute" style="margin:0">Bỏ trống: '+blank+' ý.</p>';
   recalc(); drawView();
 }
 function recalc(){
@@ -544,6 +555,7 @@ function keyInfo(){
 $("kText").oninput=keyInfo;
 $("kSel").addEventListener("change",()=>{ $("kMa").value=$("kSel").value; });
 $("kApply").onclick=()=>{
+  if(looksLikeTable($("kText").value)){ const k=tableToKeys(splitTable($("kText").value)); if(Object.keys(k).length){ $("kInfo").innerHTML=applyKeyGroups([{name:null,keys:k}]); return; } }
   if(!$("kMa").value.trim() && looksLikeKeyFile($("kText").value)){ $("kInfo").innerHTML=applyKeyGroups(parseKeyFile($("kText").value)); return; }
   const ma=($("kMa").value||$("kSel").value).trim();
   if(!ma){ $("kInfo").innerHTML='<span class="err">Sếp gõ mã đề vào ô Mã đề trước ạ.</span>'; $("kMa").focus(); return; }
@@ -661,8 +673,81 @@ $("exportKeyCur").onclick=()=>{ if(!Object.keys(KEYS).length){ $("fileInfo").tex
 $("exportKeyAll").onclick=()=>{ const ids=Object.keys(DB.exams).filter(i=>Object.keys(DB.exams[i].keys).length);
   if(!ids.length){ $("fileInfo").textContent="Chưa có bài nào có đáp án."; return; }
   saveFile("Dap an - tat ca ("+ids.length+" bai).txt",keyFileText(ids)); $("fileInfo").textContent="Đã xuất "+ids.length+" bài vào 1 file."; };
+/* ---- Đọc file Excel (.xlsx) không cần thư viện: giải nén zip bằng DecompressionStream của trình duyệt ---- */
+async function unzip(buf){
+  const dv=new DataView(buf); let e=buf.byteLength-22;
+  while(e>=0 && dv.getUint32(e,true)!==0x06054b50) e--;
+  if(e<0) throw new Error("not zip");
+  const n=dv.getUint16(e+10,true); let p=dv.getUint32(e+16,true); const files={};
+  for(let i=0;i<n;i++){
+    const method=dv.getUint16(p+10,true), csize=dv.getUint32(p+20,true), nl=dv.getUint16(p+28,true),
+          xl=dv.getUint16(p+30,true), cl=dv.getUint16(p+32,true), lo=dv.getUint32(p+42,true);
+    const name=new TextDecoder().decode(new Uint8Array(buf,p+46,nl));
+    const start=lo+30+dv.getUint16(lo+26,true)+dv.getUint16(lo+28,true);
+    files[name]={method,data:new Uint8Array(buf,start,csize)}; p+=46+nl+xl+cl;
+  }
+  return async name=>{ const f=files[name]; if(!f) return null;
+    if(f.method===0) return new TextDecoder().decode(f.data);
+    const out=await new Response(new Blob([f.data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer();
+    return new TextDecoder().decode(out); };
+}
+const xmlDoc=t=>new DOMParser().parseFromString(t,"application/xml");
+const colIdx=ref=>{ let n=0; for(const ch of ref.replace(/[0-9]/g,"")) n=n*26+ch.charCodeAt(0)-64; return n-1; };
+// Trả về [{name, rows:[[ô,...],...]}] cho từng trang tính
+async function readXlsx(buf){
+  const get=await unzip(buf);
+  const ss=[]; const sst=await get("xl/sharedStrings.xml");
+  if(sst) xmlDoc(sst).querySelectorAll("si").forEach(si=>ss.push([...si.getElementsByTagName("t")].map(t=>t.textContent).join("")));
+  const wb=xmlDoc(await get("xl/workbook.xml")), rels=xmlDoc(await get("xl/_rels/workbook.xml.rels")||"<r/>");
+  const target={}; [...rels.getElementsByTagName("Relationship")].forEach(r=>target[r.getAttribute("Id")]=r.getAttribute("Target"));
+  const sheets=[];
+  for(const sh of wb.getElementsByTagName("sheet")){
+    const rid=sh.getAttribute("r:id")||sh.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships","id");
+    let path=(target[rid]||"").replace(/^\//,""); if(!path.startsWith("xl/")) path="xl/"+path;
+    const x=await get(path); if(!x) continue;
+    const rows=[];
+    for(const row of xmlDoc(x).getElementsByTagName("row")){
+      const r=[]; for(const c of row.getElementsByTagName("c")){
+        const t=c.getAttribute("t"), v=c.getElementsByTagName("v")[0]; let val="";
+        if(t==="s") val=ss[+(v&&v.textContent)]||""; else if(t==="inlineStr") val=[...c.getElementsByTagName("t")].map(z=>z.textContent).join(""); else val=v?v.textContent:"";
+        r[colIdx(c.getAttribute("r")||"A1")]=val; }
+      rows.push(Array.from(r,v=>v==null?"":String(v)));
+    }
+    sheets.push({name:sh.getAttribute("name"),rows});
+  }
+  return sheets;
+}
+// Bảng dạng: hàng tiêu đề "Câu hỏi | 1201 | 1202 …", các hàng sau: số câu | ĐSĐS | …
+function tableToKeys(rows){
+  const h=rows.findIndex(r=>r && r.slice(1).filter(c=>/^\s*[0-9A-Za-z]{1,6}\s*$/.test(c||"")&&!/^[DSĐdsđ_]+$/.test((c||"").trim())).length>0 && (/c[âa]u/i.test(r[0]||"")||r.slice(1).filter(c=>/^\s*\d{2,6}\s*$/.test(c||"")).length>=1));
+  if(h<0) return {};
+  const head=rows[h], keys={};
+  for(let i=h+1;i<rows.length;i++){
+    const r=rows[i]||[]; const q=parseInt(String(r[0]||"").replace(/\D/g,""),10); if(!(q>=1&&q<=16)) continue;
+    for(let j=1;j<head.length;j++){
+      const ma=String(head[j]||"").trim(); if(!ma) continue;
+      const a=parseKeyText(String(r[j]||"")).slice(0,4); if(!a.length) continue;
+      const k=keys[ma]?keys[ma].split(","):new Array(64).fill("");
+      a.forEach((c,t)=>{ k[(q-1)*4+t]=c==="_"?"":c; }); keys[ma]=k.join(",");
+    }
+  }
+  return keys;
+}
+const splitTable=t=>t.replace(/^\uFEFF/,"").split(/\r?\n/).map(l=>l.split(/\t|;|,/));
+const looksLikeTable=t=>/c[âa]u/i.test(t.split(/\r?\n/)[0]||"") && /\t|;|,/.test(t);
 $("importKey").onchange=async e=>{ const f=e.target.files[0]; if(!f) return;
-  try{ $("fileInfo").innerHTML=applyKeyGroups(parseKeyFile(await f.text())); }catch(err){ $("fileInfo").innerHTML='<span class="err">Không đọc được file.</span>'; }
+  try{
+    let groups;
+    if(/\.xlsx$/i.test(f.name)){
+      const sheets=(await readXlsx(await f.arrayBuffer())).map(sh=>({name:sh.name,keys:tableToKeys(sh.rows)})).filter(g=>Object.keys(g.keys).length);
+      groups=sheets.length>1?sheets:sheets.map(g=>({name:null,keys:g.keys}));   // 1 trang tính -> nạp vào bài đang chọn
+      if(!groups.length) throw new Error("Không thấy bảng đáp án: cần hàng tiêu đề 'Câu hỏi | mã đề…' và các hàng số câu.");
+    } else {
+      const t=await f.text();
+      groups=looksLikeTable(t)?[{name:null,keys:tableToKeys(splitTable(t))}].filter(g=>Object.keys(g.keys).length):parseKeyFile(t);
+    }
+    $("fileInfo").innerHTML=applyKeyGroups(groups);
+  }catch(err){ $("fileInfo").innerHTML='<span class="err">Không đọc được file. '+esc(err.message&&err.message.length>20?err.message:"")+'</span>'; }
   e.target.value=""; };
 
 renderExams(); renderKeySel(); renderResults();
