@@ -69,6 +69,10 @@ th,td{border-bottom:1px solid var(--line);padding:8px 4px;text-align:left}
 .camBar #shutter{width:76px;height:76px;border-radius:50%;background:#fff;border:6px solid #888}
 .camBar #shutter:active{background:#ddd}
 .camBar [hidden]{display:none}
+.exbar{padding:0 12px 8px;gap:6px;flex-wrap:nowrap}
+.exbar>*{flex:0 0 auto}
+.btn.sm{min-height:44px;padding:0 10px;font-size:15px}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
@@ -81,6 +85,13 @@ th,td{border-bottom:1px solid var(--line);padding:8px 4px;text-align:left}
     <button role="tab" data-tab="ketqua" aria-selected="false">📋 Kết quả</button>
     <button role="tab" data-tab="caidat" aria-selected="false">⚙️ Cài</button>
   </nav>
+  <div class="row exbar">
+    <label for="exSel" class="vh">Bài kiểm tra đang dùng</label>
+    <select id="exSel" style="flex:1 1 150px"></select>
+    <button type="button" class="btn sm" id="exNew" aria-label="Tạo bài kiểm tra mới">➕ Bài</button>
+    <button type="button" class="btn sm" id="exRen" aria-label="Đổi tên bài kiểm tra">✏️</button>
+    <button type="button" class="btn sm danger" id="exDel" aria-label="Xoá bài kiểm tra">🗑️</button>
+  </div>
 </header>
 
 <main>
@@ -128,6 +139,16 @@ th,td{border-bottom:1px solid var(--line);padding:8px 4px;text-align:left}
 <!-- ================= TAB ĐÁP ÁN ================= -->
 <section id="tab-dapan" hidden>
   <div class="card">
+    <p style="margin-top:0"><b>📁 File đáp án</b> — một file chứa nhiều bài, nhiều mã đề. Nhập trên máy tính, xuất 1 file, gửi Zalo, nạp trên điện thoại là xong.</p>
+    <div class="row">
+      <button type="button" class="btn pri" id="exportKeyCur">⬇️ Xuất đáp án bài này</button>
+      <button type="button" class="btn" id="exportKeyAll">⬇️ Xuất tất cả các bài</button>
+      <label for="importKey" class="btn">⬆️ Nạp file đáp án</label>
+      <input id="importKey" type="file" accept=".txt,.csv,text/plain" hidden>
+    </div>
+    <p id="fileInfo" class="mute" style="margin:6px 0 0" role="status"></p>
+  </div>
+  <div class="card">
     <div class="row">
       <div><label for="kSel">Mã đề</label><select id="kSel"></select></div>
       <div style="flex:0 0 auto;align-self:flex-end" class="row">
@@ -139,7 +160,7 @@ th,td{border-bottom:1px solid var(--line);padding:8px 4px;text-align:left}
     <div class="grid" id="kGrid"></div>
   </div>
   <div class="card">
-    <p style="margin-top:0"><b>Nhập nhanh</b> — gõ mã đề, dán chuỗi Đ/S rồi bấm Nạp. Không cần tạo mã trước, không cần đủ 16 câu.</p>
+    <p style="margin-top:0"><b>Nhập nhanh</b> — gõ mã đề, dán chuỗi Đ/S rồi bấm Nạp. Không cần tạo mã trước, không cần đủ 16 câu. Dán cả nội dung file đáp án (nhiều dòng <code>101: ĐSĐS …</code>) cũng được — khi đó bỏ trống ô Mã đề.</p>
     <label for="kMa">Mã đề</label>
     <input id="kMa" type="text" inputmode="numeric" placeholder="VD 101">
     <label for="kText" style="display:block;margin-top:8px">Chuỗi đáp án theo thứ tự 1a, 1b, 1c, 1d, 2a… (cách, xuống dòng, số câu tuỳ ý)</label>
@@ -152,8 +173,7 @@ th,td{border-bottom:1px solid var(--line);padding:8px 4px;text-align:left}
 <!-- ================= TAB KẾT QUẢ ================= -->
 <section id="tab-ketqua" hidden>
   <div class="card">
-    <label for="batch">Tên đợt chấm / lớp (dùng đặt tên file)</label>
-    <input id="batch" type="text" placeholder="VD: KS chu de 11F">
+    <p style="margin-top:0">Kết quả của bài: <b id="resExam"></b></p>
     <div class="row" style="margin-top:8px">
       <button class="btn pri" id="exportCsv">⬇️ Xuất Excel (CSV)</button>
       <button class="btn danger" id="clearRes">🗑️ Xoá hết</button>
@@ -225,11 +245,22 @@ const store = {
   get(k,d){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch(e){ return d; } },
   set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
 };
-let KEYS = store.get("cds_keys", {});            // { "101": "DSDS...(64 ký tự, '' = chưa có)" }
-let RESULTS = store.get("cds_results", []);
 let SET = Object.assign({pts:[0,0.1,0.25,0.5,1], thr:0.05, to10:false, batch:""}, store.get("cds_settings", {}));
 if(SET.v!==3){ SET.thr=0.05; SET.v=3; } // ngưỡng chỉnh theo ảnh phiếu thật (20/11/2026)
-const saveSet=()=>store.set("cds_settings",SET), saveKeys=()=>store.set("cds_keys",KEYS), saveRes=()=>store.set("cds_results",RESULTS);
+// Nhiều bài kiểm tra: DB = { cur: id, exams: { id: {name, keys:{ "101":"D,S,..." (64 ô), results:[...] } } }
+let DB = store.get("cds_db", null);
+if(!DB || !DB.exams){ // chuyển dữ liệu bản cũ (một bài) sang dạng nhiều bài
+  DB={cur:"e1",exams:{e1:{name:SET.batch||"Bài kiểm tra 1",keys:store.get("cds_keys",{}),results:store.get("cds_results",[])}}};
+}
+let EX, KEYS, RESULTS;
+const saveSet=()=>store.set("cds_settings",SET), saveDB=()=>store.set("cds_db",DB), saveKeys=saveDB, saveRes=saveDB;
+function newExam(name){ const id="e"+Date.now().toString(36)+Math.random().toString(36).slice(2,5); DB.exams[id]={name,keys:{},results:[]}; return id; }
+function useExam(id){
+  if(!Object.keys(DB.exams).length) id=newExam("Bài kiểm tra 1");
+  if(!DB.exams[id]) id=Object.keys(DB.exams)[0];
+  DB.cur=id; EX=DB.exams[id]; KEYS=EX.keys; RESULTS=EX.results; saveDB();
+}
+useExam(DB.cur);
 
 /* ===================== 3. XỬ LÝ ẢNH ===================== */
 // Đọc ảnh, thu nhỏ cạnh dài tối đa 1600px, đổi sang thang xám
@@ -423,7 +454,7 @@ async function processSource(getSrc){
         alert("Đã lưu đáp án mã "+name+(miss?(". Còn "+miss+" ý chưa đọc được — sếp bổ sung ở tab Đáp án."):"."));
         $("asKey").checked=false; switchTab("dapan"); }
     } else {
-      CUR={sbd:R.sbd,made:R.made,ans:R.ans,R}; showResult();
+      CUR={sbd:R.sbd,made:R.made,ans:R.ans,R}; showResult(); $("msg").insertAdjacentHTML("afterbegin",'<p class="mute" style="margin:0">Bài: <b>'+esc(EX.name)+'</b></p>');
     }
   }catch(e){ $("result").hidden=false; $("msg").innerHTML='<p class="err">'+e.message+'</p>'; CUR=null; $("view").width=1; }
   finally{ $("busy").hidden=true; $("camIn").value=""; $("fileIn").value=""; if(!$("result").hidden) $("result").scrollIntoView({block:"start"}); }
@@ -513,6 +544,7 @@ function keyInfo(){
 $("kText").oninput=keyInfo;
 $("kSel").addEventListener("change",()=>{ $("kMa").value=$("kSel").value; });
 $("kApply").onclick=()=>{
+  if(!$("kMa").value.trim() && looksLikeKeyFile($("kText").value)){ $("kInfo").innerHTML=applyKeyGroups(parseKeyFile($("kText").value)); return; }
   const ma=($("kMa").value||$("kSel").value).trim();
   if(!ma){ $("kInfo").innerHTML='<span class="err">Sếp gõ mã đề vào ô Mã đề trước ạ.</span>'; $("kMa").focus(); return; }
   const a=parseKeyText($("kText").value).slice(0,64);
@@ -534,7 +566,7 @@ function renderResults(){
     b.setAttribute("aria-label","Xoá kết quả SBD "+r.sbd);
     b.onclick=()=>{ if(confirm("Xoá kết quả SBD "+r.sbd+"?")){ RESULTS.splice(i,1); saveRes(); renderResults(); } };
     td.appendChild(b); tr.appendChild(td); tb.appendChild(tr); });
-  $("resCount").textContent="Đã lưu "+RESULTS.length+" bài.";
+  $("resCount").textContent="Đã lưu "+RESULTS.length+" bài làm."; $("resExam").textContent=EX.name;
 }
 $("exportCsv").onclick=()=>{
   if(!RESULTS.length) return alert("Chưa có kết quả.");
@@ -546,20 +578,94 @@ $("exportCsv").onclick=()=>{
     row.push(sc?sc.per.map(p=>p.c).join(" "):""); row.push(r.t); rows.push(row); });
   const csv="﻿"+rows.map(r=>r.map(c=>{c=String(c);return /[",;\n]/.test(c)?'"'+c.replace(/"/g,'""')+'"':c;}).join(",")).join("\r\n");
   const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
-  a.download=(($("batch").value||"ket-qua-cham").replace(/[\\/:*?"<>|]/g,"_"))+".csv"; document.body.appendChild(a); a.click(); a.remove();
+  a.download="Ket qua - "+safeName(EX.name)+".csv"; document.body.appendChild(a); a.click(); a.remove();
 };
-$("clearRes").onclick=()=>{ if(RESULTS.length&&confirm("Xoá hết "+RESULTS.length+" kết quả? Nhớ xuất CSV trước.")){ RESULTS=[]; saveRes(); renderResults(); } };
-$("batch").oninput=e=>{ SET.batch=e.target.value; saveSet(); };
+$("clearRes").onclick=()=>{ if(RESULTS.length&&confirm("Xoá hết "+RESULTS.length+" kết quả? Nhớ xuất CSV trước.")){ RESULTS.length=0; saveRes(); renderResults(); } };
+
 
 /* ===================== 8. CÀI ĐẶT & CHUYỂN TAB ===================== */
 [1,2,3,4].forEach(i=>{ const el=$("p"+i); el.value=SET.pts[i]; el.oninput=()=>{ SET.pts[i]=parseFloat(el.value)||0; saveSet(); }; });
 $("to10").checked=SET.to10; $("to10").onchange=e=>{ SET.to10=e.target.checked; saveSet(); };
 $("sens").value=SET.thr; $("sensV").textContent=SET.thr; $("sens").oninput=e=>{ SET.thr=parseFloat(e.target.value); $("sensV").textContent=SET.thr; saveSet(); };
-$("batch").value=SET.batch||"";
+
 function switchTab(t){ document.querySelectorAll("nav button").forEach(b=>b.setAttribute("aria-selected",b.dataset.tab===t));
   document.querySelectorAll("main>section").forEach(s=>s.hidden=s.id!=="tab-"+t); if(t==="cham"&&CUR) recalc(); }
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
-renderKeySel(); renderResults();
+/* ===================== 10. NHIỀU BÀI KIỂM TRA & FILE ĐÁP ÁN ===================== */
+const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const safeName=t=>String(t||"bai").replace(/[\\/:*?"<>|]/g,"_").trim()||"bai";
+function renderExams(){
+  const s=$("exSel"); s.innerHTML="";
+  Object.entries(DB.exams).forEach(([id,e])=>{ const o=document.createElement("option"); o.value=id;
+    o.textContent=e.name+" ("+Object.keys(e.keys).length+" mã · "+e.results.length+" bài làm)"; s.appendChild(o); });
+  s.value=DB.cur;
+}
+function refreshAll(){ renderExams(); $("kMa").value=""; renderKeySel(); renderResults(); if(CUR&&!$("result").hidden){ recalc(); drawView(); } }
+$("exSel").onchange=e=>{ useExam(e.target.value); refreshAll(); };
+$("exNew").onclick=()=>{ const n=(prompt("Tên bài kiểm tra mới (VD: KS chủ đề 11F):","")||"").trim(); if(!n) return;
+  useExam(newExam(n)); refreshAll(); switchTab("dapan"); };
+$("exRen").onclick=()=>{ const n=(prompt("Đổi tên bài kiểm tra:",EX.name)||"").trim(); if(!n) return; EX.name=n; saveDB(); refreshAll(); };
+$("exDel").onclick=()=>{ if(!confirm("Xoá bài \""+EX.name+"\" cùng "+Object.keys(KEYS).length+" mã đáp án và "+RESULTS.length+" bài làm đã chấm?")) return;
+  delete DB.exams[DB.cur]; useExam(Object.keys(DB.exams)[0]); refreshAll(); };
+
+// File đáp án dạng chữ, mở được bằng Notepad/Zalo:
+//   # BÀI: KS chủ đề 11F
+//   101: ĐSĐS SSĐĐ ĐĐĐS ...   (theo câu 1a,1b,1c,1d,2a…; _ = ý chưa có đáp án)
+function keyLine(ma,k){
+  let last=-1; k.forEach((a,i)=>{ if(a) last=i; }); const n=Math.ceil((last+1)/4)*4; let t="";
+  for(let i=0;i<n;i++) t+=(k[i]==="D"?"Đ":k[i]||"_")+(i%4===3&&i<n-1?" ":"");
+  return ma+": "+t;
+}
+function keyFileText(ids){
+  let t="# ĐÁP ÁN CHẤM ĐÚNG/SAI — mỗi dòng: mã đề: Đ/S theo câu 1a,1b,1c,1d,2a… (_ = chưa có)\r\n";
+  ids.forEach(id=>{ const e=DB.exams[id]; t+="\r\n# BÀI: "+e.name+"\r\n";
+    Object.keys(e.keys).sort().forEach(ma=>{ t+=keyLine(ma,e.keys[ma].split(","))+"\r\n"; }); });
+  return t;
+}
+function saveFile(name,text){
+  const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob(["\uFEFF"+text],{type:"text/plain;charset=utf-8"}));
+  a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1500);
+}
+const MA_LINE=/^\s*([0-9A-Za-z]{1,6})\s*[:=;\t]\s*(.+)$/;
+function looksLikeKeyFile(t){
+  return /^\s*#\s*B[ÀAàa]I\s*:/mi.test(t) || t.split(/\r?\n/).some(l=>{ const m=l.match(MA_LINE); return m && parseKeyText(m[2]).length>=5; });
+}
+function parseKeyFile(text){
+  const groups=[]; let cur={name:null,keys:{}}; groups.push(cur);
+  for(const raw of text.replace(/^\uFEFF/,"").split(/\r?\n/)){
+    const line=raw.trim(); if(!line) continue;
+    const h=line.match(/^#\s*B[ÀAàa]I\s*:\s*(.+)$/i); if(h){ cur={name:h[1].trim(),keys:{}}; groups.push(cur); continue; }
+    if(line[0]==="#") continue;
+    const m=line.match(MA_LINE); if(!m) continue;
+    const a=parseKeyText(m[2]).slice(0,64); if(!a.length) continue;
+    const k=new Array(64).fill(""); a.forEach((c,i)=>{ k[i]=c==="_"?"":c; }); cur.keys[m[1]]=k.join(",");
+  }
+  return groups.filter(g=>Object.keys(g.keys).length);
+}
+// Nạp các nhóm đáp án: bài cùng tên thì gộp (mã trùng thì thay), bài mới thì tạo; không ghi tên bài thì vào bài đang chọn
+function applyKeyGroups(groups){
+  if(!groups.length) return '<span class="err">Không thấy dòng đáp án nào (dạng "101: ĐSĐS SSĐĐ …").</span>';
+  const done=[];
+  groups.forEach(g=>{
+    let id=DB.cur;
+    if(g.name){ id=Object.keys(DB.exams).find(i=>DB.exams[i].name.trim().toLowerCase()===g.name.toLowerCase()) || newExam(g.name); }
+    Object.assign(DB.exams[id].keys,g.keys); done.push(DB.exams[id].name+": "+Object.keys(g.keys).join(", "));
+  });
+  // bỏ các bài trống (chưa có đáp án, chưa chấm bài nào) cho gọn danh sách
+  Object.keys(DB.exams).forEach(i=>{ const e=DB.exams[i]; if(!Object.keys(e.keys).length&&!e.results.length&&Object.keys(DB.exams).length>1) delete DB.exams[i]; });
+  saveDB(); useExam(DB.cur); refreshAll();
+  return '<span style="color:var(--ok);font-weight:600">✅ Đã nạp '+groups.length+' bài — '+esc(done.join(" · "))+'</span>';
+}
+$("exportKeyCur").onclick=()=>{ if(!Object.keys(KEYS).length){ $("fileInfo").textContent="Bài này chưa có đáp án."; return; }
+  saveFile("Dap an - "+safeName(EX.name)+".txt",keyFileText([DB.cur])); $("fileInfo").textContent="Đã xuất file đáp án bài "+EX.name+"."; };
+$("exportKeyAll").onclick=()=>{ const ids=Object.keys(DB.exams).filter(i=>Object.keys(DB.exams[i].keys).length);
+  if(!ids.length){ $("fileInfo").textContent="Chưa có bài nào có đáp án."; return; }
+  saveFile("Dap an - tat ca ("+ids.length+" bai).txt",keyFileText(ids)); $("fileInfo").textContent="Đã xuất "+ids.length+" bài vào 1 file."; };
+$("importKey").onchange=async e=>{ const f=e.target.files[0]; if(!f) return;
+  try{ $("fileInfo").innerHTML=applyKeyGroups(parseKeyFile(await f.text())); }catch(err){ $("fileInfo").innerHTML='<span class="err">Không đọc được file.</span>'; }
+  e.target.value=""; };
+
+renderExams(); renderKeySel(); renderResults();
 /* ===================== 9. CAMERA TRỰC TIẾP: TỰ KHOANH Ô VUÔNG, TỰ CHỤP ===================== */
 const CAM={stream:null,timer:null,stable:0,last:null,busy:false,torch:false};
 const NEED_HIT=32;      // số ô định vị (trên 36) phải thấy thì coi là phiếu đã vào khung
