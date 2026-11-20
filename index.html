@@ -139,9 +139,13 @@ th,td{border-bottom:1px solid var(--line);padding:8px 4px;text-align:left}
     <div class="grid" id="kGrid"></div>
   </div>
   <div class="card">
-    <label for="kText">Nhập nhanh: 64 chữ Đ/S theo thứ tự câu 1a, 1b, 1c, 1d, 2a… (cách, xuống dòng tuỳ ý)</label>
+    <p style="margin-top:0"><b>Nhập nhanh</b> — gõ mã đề, dán chuỗi Đ/S rồi bấm Nạp. Không cần tạo mã trước, không cần đủ 16 câu.</p>
+    <label for="kMa">Mã đề</label>
+    <input id="kMa" type="text" inputmode="numeric" placeholder="VD 101">
+    <label for="kText" style="display:block;margin-top:8px">Chuỗi đáp án theo thứ tự 1a, 1b, 1c, 1d, 2a… (cách, xuống dòng, số câu tuỳ ý)</label>
     <textarea id="kText" placeholder="ĐSĐS SSĐĐ ĐĐĐS ..."></textarea>
-    <div class="row" style="margin-top:8px"><button class="btn pri" id="kApply">Áp dụng</button><button class="btn" id="kCopy">Lấy chuỗi hiện tại</button></div>
+    <p id="kInfo" class="mute" style="margin:4px 0 0" role="status"></p>
+    <div class="row" style="margin-top:8px"><button class="btn pri" id="kApply">✅ Nạp đáp án</button><button class="btn" id="kCopy">Lấy chuỗi hiện tại</button></div>
   </div>
 </section>
 
@@ -394,7 +398,8 @@ function scoreOf(ans,key){
   let total=0; const per=[];
   for(let q=0;q<16;q++){ let c=0; for(let k=0;k<4;k++){ const i=q*4+k; if(key[i]&&ans[i]===key[i]) c++; }
     const pt=c?Number(SET.pts[c])||0:0; per.push({c,pt}); total+=pt; }
-  return {total:Math.round(total*1000)/1000, per};
+  const nQ=[...Array(16).keys()].filter(q=>key.slice(q*4,q*4+4).some(Boolean)).length||16; // số câu có đáp án
+  return {total:Math.round(total*1000)/1000, per, nQ};
 }
 const fmt=x=>(Math.round(x*100)/100).toString().replace(".",",");
 const LBL={D:"Đ",S:"S",X:"Đ+S","":"·"};
@@ -437,7 +442,7 @@ function showResult(){
 function recalc(){
   const key=keyArr($("rMa").value.trim()); const sc=scoreOf(CUR.ans,key);
   $("rScore").textContent=sc?fmt(sc.total):"–";
-  $("rScore10").textContent=sc&&SET.to10?"(thang 10: "+fmt(sc.total/16*10)+")":"";
+  $("rScore10").textContent=sc&&SET.to10?"(thang 10: "+fmt(sc.total/sc.nQ*10)+")":"";
   if(sc){ const cnt=[0,0,0,0,0]; sc.per.forEach(p=>cnt[p.c]++); $("rDetail").textContent="Số câu đúng 4 ý: "+cnt[4]+" · 3 ý: "+cnt[3]+" · 2 ý: "+cnt[2]+" · 1 ý: "+cnt[1]+" · 0 ý: "+cnt[0]; }
   else $("rDetail").textContent="Chưa có đáp án cho mã đề này.";
   renderGrid($("rGrid"),CUR.ans,key,sc,(i)=>{ const order=["D","S",""]; const a=CUR.ans[i]; CUR.ans[i]=order[(order.indexOf(a)+1)%3]; recalc(); drawView(); });
@@ -485,7 +490,7 @@ function renderKeySel(sel){
   const names=Object.keys(KEYS).sort(); const s=$("kSel"); s.innerHTML="";
   if(!names.length){ s.innerHTML='<option value="">(chưa có mã đề — bấm Mã mới)</option>'; }
   names.forEach(n=>{ const o=document.createElement("option"); o.value=n; o.textContent="Mã "+n+(KEYS[n].split(",").filter(Boolean).length<64?" (chưa đủ)":""); s.appendChild(o); });
-  if(sel) s.value=sel; renderKeyGrid();
+  if(sel) s.value=sel; if($("kMa")&&!$("kMa").value) $("kMa").value=s.value; renderKeyGrid();
 }
 function renderKeyGrid(){
   const ma=$("kSel").value; const el=$("kGrid");
@@ -497,10 +502,25 @@ $("kSel").onchange=renderKeyGrid;
 $("kNew").onclick=()=>{ const n=(prompt("Nhập mã đề (VD 101):")||"").trim(); if(!n) return;
   if(!KEYS[n]){ KEYS[n]=new Array(64).fill("").join(","); saveKeys(); } renderKeySel(n); };
 $("kDel").onclick=()=>{ const ma=$("kSel").value; if(ma&&confirm("Xoá đáp án mã "+ma+"?")){ delete KEYS[ma]; saveKeys(); renderKeySel(); } };
-$("kApply").onclick=()=>{ const ma=$("kSel").value; if(!ma) return alert("Sếp tạo mã đề trước (Mã mới).");
-  const s=$("kText").value.toUpperCase().replace(/Đ/g,"D").replace(/[^DS]/g,"");
-  if(s.length!==64) return alert("Đang có "+s.length+" chữ Đ/S — cần đúng 64 (16 câu × 4 ý).");
-  KEYS[ma]=s.split("").join(","); saveKeys(); renderKeySel(ma); };
+// Đọc chuỗi Đ/S: bỏ số câu, dấu cách, chữ a) b)… ; "_" hoặc "-" = ý chưa có đáp án
+function parseKeyText(t){
+  return t.toUpperCase().replace(/Đ/g,"D").replace(/[A-C]\)|D\)/g,"").replace(/[^DS_\-]/g,"").replace(/-/g,"_").split("");
+}
+function keyInfo(){
+  const n=parseKeyText($("kText").value).length, q=Math.ceil(n/4);
+  $("kInfo").textContent = n ? ("Đã nhận "+n+" ý ≈ "+q+" câu"+(n>64?" — quá 64 ý, phần thừa bị bỏ.":(n%4?" (câu cuối chưa đủ 4 ý).":"."))) : "";
+}
+$("kText").oninput=keyInfo;
+$("kSel").addEventListener("change",()=>{ $("kMa").value=$("kSel").value; });
+$("kApply").onclick=()=>{
+  const ma=($("kMa").value||$("kSel").value).trim();
+  if(!ma){ $("kInfo").innerHTML='<span class="err">Sếp gõ mã đề vào ô Mã đề trước ạ.</span>'; $("kMa").focus(); return; }
+  const a=parseKeyText($("kText").value).slice(0,64);
+  if(!a.length){ $("kInfo").innerHTML='<span class="err">Chưa thấy chữ Đ/S nào trong chuỗi.</span>'; return; }
+  const k=new Array(64).fill(""); a.forEach((c,i)=>{ k[i]=c==="_"?"":c; });
+  KEYS[ma]=k.join(","); saveKeys(); renderKeySel(ma);
+  $("kInfo").innerHTML='<span style="color:var(--ok);font-weight:600">✅ Đã nạp mã '+ma+': '+a.filter(c=>c!=="_").length+' ý ('+Math.ceil(a.length/4)+' câu).</span>';
+};
 $("kCopy").onclick=()=>{ const ma=$("kSel").value; if(!ma) return;
   const k=KEYS[ma].split(","); let t=""; for(let q=0;q<16;q++) t+=k.slice(q*4,q*4+4).map(a=>a==="D"?"Đ":a||"_").join("")+(q%4===3?"\n":" ");
   $("kText").value=t.trim(); };
@@ -521,7 +541,7 @@ $("exportCsv").onclick=()=>{
   const head=["STT","SBD","Ma de","Diem"]; if(SET.to10) head.push("Thang 10"); for(let q=1;q<=16;q++) head.push("Cau "+q); head.push("So y dung moi cau","Thoi gian");
   const rows=[head];
   RESULTS.forEach((r,i)=>{ const key=keyArr(r.ma), sc=scoreOf(r.ans,key);
-    const row=[i+1,"'"+r.sbd,"'"+r.ma,sc?fmt(sc.total):""]; if(SET.to10) row.push(sc?fmt(sc.total/16*10):"");
+    const row=[i+1,"'"+r.sbd,"'"+r.ma,sc?fmt(sc.total):""]; if(SET.to10) row.push(sc?fmt(sc.total/sc.nQ*10):"");
     for(let q=0;q<16;q++) row.push(r.ans.slice(q*4,q*4+4).map(a=>a==="D"?"Đ":a==="X"?"*":a||"_").join(""));
     row.push(sc?sc.per.map(p=>p.c).join(" "):""); row.push(r.t); rows.push(row); });
   const csv="﻿"+rows.map(r=>r.map(c=>{c=String(c);return /[",;\n]/.test(c)?'"'+c.replace(/"/g,'""')+'"':c;}).join(",")).join("\r\n");
